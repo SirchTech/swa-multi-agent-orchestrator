@@ -114,12 +114,39 @@ export abstract class Agent {
    * @param name - The input name string.
    * @returns A unique key derived from the input name.
    */
+  // Static cache for agent keys to avoid redundant regex processing
+  private static keyCache = new Map<string, string>();
+  
   private generateKeyFromName(name: string): string {
+    // Check if we've already computed this key
+    if (Agent.keyCache.has(name)) {
+      return Agent.keyCache.get(name)!;
+    }
+    
     // Remove special characters and replace spaces with hyphens
-    const key = name
-      .replace(/[^a-zA-Z0-9\s-]/g, "")
-      .replace(/\s+/g, "-")
-      .toLowerCase();
+    // Perform these operations in a single pass through the string for better performance
+    let key = '';
+    const nameLower = name.toLowerCase();
+    
+    for (let i = 0; i < nameLower.length; i++) {
+      const char = nameLower.charAt(i);
+      if (/[a-z0-9-]/.test(char)) {
+        key += char;
+      } else if (/\s/.test(char)) {
+        // Only add a hyphen if the previous character wasn't also a hyphen or empty
+        if (key.length > 0 && key[key.length - 1] !== '-') {
+          key += '-';
+        }
+      }
+      // Ignore other characters (special chars)
+    }
+    
+    // Trim any trailing hyphens
+    key = key.replace(/-+$/, '');
+    
+    // Cache the result
+    Agent.keyCache.set(name, key);
+    
     return key;
   }
 

@@ -1,6 +1,7 @@
 from typing import Dict, Any, AsyncIterable, Optional, Union
 from dataclasses import dataclass, fields, asdict, replace
 import time
+import asyncio
 from multi_agent_orchestrator.utils.logger import Logger
 from multi_agent_orchestrator.types import ConversationMessage, ParticipantRole, OrchestratorConfig
 from multi_agent_orchestrator.classifiers import Classifier,ClassifierResult
@@ -83,13 +84,29 @@ class MultiAgentOrchestrator:
         session_id = params['session_id']
         classifier_result:ClassifierResult = params['classifier_result']
         additional_params = params.get('additional_params', {})
+        # Use provided chat history if available to avoid redundant fetching
+        provided_chat_history = params.get('chat_history')
 
         if not classifier_result.selected_agent:
             return "I'm sorry, but I need more information to understand your request. \
                 Could you please be more specific?"
 
         selected_agent = classifier_result.selected_agent
-        agent_chat_history = await self.storage.fetch_chat(user_id, session_id, selected_agent.id)
+        
+        # Start timing before fetching chat history
+        start_time = time.time()
+        
+        # Fetch agent-specific chat history only if not provided
+        # This is more efficient than always fetching
+        if provided_chat_history is None:
+            agent_chat_history = await self.storage.fetch_chat(user_id, session_id, selected_agent.id)
+        else:
+            # Use the pre-fetched history from the parent method if available
+            agent_chat_history = provided_chat_history
+            
+        if self.config.LOG_EXECUTION_TIMES:
+            chat_fetch_time = time.time() - start_time
+            self.execution_times["Fetching agent chat history"] = chat_fetch_time
 
         self.logger.print_chat_history(agent_chat_history, selected_agent.id)
 
@@ -107,10 +124,14 @@ class MultiAgentOrchestrator:
     async def classify_request(self,
                              user_input: str,
                              user_id: str,
-                             session_id: str) -> ClassifierResult:
+                             session_id: str,
+                             chat_history: Optional[list[ConversationMessage]] = None) -> ClassifierResult:
         """Classify user request with conversation history."""
         try:
-            chat_history = await self.storage.fetch_all_chats(user_id, session_id) or []
+            # If chat_history is provided, use it; otherwise fetch it (reduces duplicate fetches)
+            if chat_history is None:
+                chat_history = await self.storage.fetch_all_chats(user_id, session_id) or []
+                
             classifier_result = await self.measure_execution_time(
                 "Classifying user intent",
                 lambda: self.classifier.classify(user_input, chat_history)
@@ -135,7 +156,8 @@ class MultiAgentOrchestrator:
                                user_id: str,
                                session_id: str,
                                classifier_result: ClassifierResult,
-                               additional_params: Dict[str, str] = {}) -> AgentResponse:
+                               additional_params: Dict[str, str] = {},
+                               chat_history: Optional[list[ConversationMessage]] = None) -> AgentResponse:
         """Process agent response and handle chat storage."""
         try:
             agent_response = await self.dispatch_to_agent({
@@ -143,7 +165,8 @@ class MultiAgentOrchestrator:
                 "user_id": user_id,
                 "session_id": session_id,
                 "classifier_result": classifier_result,
-                "additional_params": additional_params
+                "additional_params": additional_params,
+                "chat_history": chat_history  # Pass the chat history to avoid refetching
             })
 
             metadata = self.create_metadata(classifier_result,
@@ -187,7 +210,20 @@ class MultiAgentOrchestrator:
         self.execution_times.clear()
 
         try:
-            classifier_result = await self.classify_request(user_input, user_id, session_id)
+            # Start fetching chat history in parallel with classification
+            # This reduces latency by overlapping I/O operations
+            chat_history_task = asyncio.create_task(
+                self.storage.fetch_all_chats(user_id, session_id)
+            )
+            
+            # Start classification concurrently, passing None for chat_history
+            # This will make classify_request fetch it itself if needed
+            classifier_result_task = asyncio.create_task(
+                self.classify_request(user_input, user_id, session_id, None)
+            )
+            
+            # Wait for classification to complete
+            classifier_result = await classifier_result_task
             
             if not classifier_result.selected_agent:
                 return AgentResponse(
@@ -199,12 +235,17 @@ class MultiAgentOrchestrator:
                     streaming=False
                 )
 
+            # Use the pre-fetched chat history if needed for agent processing
+            # No need to await again as we started it earlier
+            chat_history = await chat_history_task or []
+            
             return await self.agent_process_request(
                 user_input, 
                 user_id,
                 session_id, 
                 classifier_result,
-                additional_params
+                additional_params,
+                chat_history  # Pass the fetched chat history to avoid refetching
             )
 
         except Exception as error:

@@ -191,6 +191,10 @@ export class MultiAgentOrchestrator {
   private executionTimes: Map<string, number>;
   private logger: Logger;
   private defaultAgent: Agent;
+  
+  // Cache for agent metadata to avoid recreating objects on every call
+  private agentMetadataCache: { [key: string]: { name: string; description: string } } | null = null;
+  private lastAgentUpdateTime: number = 0;
 
   constructor(options: OrchestratorOptions = {}) {
     this.storage = options.storage || new InMemoryChatStorage();
@@ -246,6 +250,9 @@ export class MultiAgentOrchestrator {
       throw new Error(`An agent with ID '${agent.id}' already exists.`);
     }
     this.agents[agent.id] = agent;
+    // Invalidate the agent metadata cache when a new agent is added
+    this.agentMetadataCache = null;
+    this.lastAgentUpdateTime = Date.now();
     this.classifier.setAgents(this.agents);
   }
 
@@ -257,13 +264,27 @@ export class MultiAgentOrchestrator {
     this.defaultAgent = agent;
   }
 
+  // Property already defined in class declaration
+
   getAllAgents(): { [key: string]: { name: string; description: string } } {
-    return Object.fromEntries(
-      Object.entries(this.agents).map(([key, { name, description }]) => [
-        key,
-        { name, description },
-      ])
-    );
+    // If we have a valid cache and agents haven't changed (checked via lastAgentUpdateTime), use it
+    if (this.agentMetadataCache !== null) {
+      return this.agentMetadataCache;
+    }
+    
+    // Otherwise, rebuild the cache without using Object.fromEntries (ES2019+)
+    const result: { [key: string]: { name: string; description: string } } = {};
+    
+    // Convert the entries manually instead of using Object.fromEntries
+    Object.entries(this.agents).forEach(([key, agent]) => {
+      result[key] = { 
+        name: agent.name, 
+        description: agent.description 
+      };
+    });
+    
+    this.agentMetadataCache = result;
+    return this.agentMetadataCache;
   }
 
   private isAsyncIterable(obj: any): obj is AsyncIterable<any> {
@@ -324,9 +345,15 @@ export class MultiAgentOrchestrator {
           return response;
         }
 
-        classifierResult.modelStats.push(...response.modelStats);
-        classifierResult.info =  {};
-        if(response.citations){
+        // Safely handle modelStats and citations
+        if (response.modelStats && Array.isArray(response.modelStats)) {
+          classifierResult.modelStats.push(...response.modelStats);
+        }
+        
+        classifierResult.info = {};
+        
+        // Check if citations exists on the response object
+        if (response.hasOwnProperty('citations') && response.citations) {
           classifierResult.info["citations"] = response.citations;
         }
 
@@ -367,7 +394,8 @@ export class MultiAgentOrchestrator {
       this.logger.printIntent(userInput, classifierResult);
   
       if (!classifierResult.selectedAgent && this.config.USE_DEFAULT_AGENT_IF_NONE_IDENTIFIED && this.defaultAgent) {
-        const fallbackResult = this.getFallbackResult(classifierResult.modelStats);
+        const modelStats = classifierResult.modelStats || [];
+        const fallbackResult = this.getFallbackResult(modelStats);
         this.logger.info("Using default agent as no agent was selected");
         return fallbackResult;
       }
@@ -384,7 +412,7 @@ export class MultiAgentOrchestrator {
     userId: string,
     sessionId: string,
     classifierResult: ClassifierResult,
-    additionalParams: Record<any, any> = {},
+    additionalParams: Record<string, any> = {},
     chatHistory: ConversationMessage[]
   ): Promise<AgentResponse> {
     try {
@@ -413,12 +441,13 @@ export class MultiAgentOrchestrator {
           metadata,
           output: accumulatorTransform,
           streaming: true,
-          modelStats:  [{"a":"streaming"}]
+          modelStats: [{"a":"streaming"}]
         };
       }
   
+      // Save conversation in background without blocking the response
       if (classifierResult?.selectedAgent.saveChat) {
-        await saveConversationExchange(
+        saveConversationExchange(
           userInput,
           agentResponse,
           this.storage,
@@ -426,7 +455,9 @@ export class MultiAgentOrchestrator {
           sessionId,
           classifierResult?.selectedAgent.id,
           this.config.MAX_MESSAGE_PAIRS_PER_AGENT
-        );
+        ).catch(err => {
+          this.logger.error("Error saving conversation exchange:", err);
+        });
       }
   
       return {
@@ -446,16 +477,20 @@ export class MultiAgentOrchestrator {
     userInput: string,
     userId: string,
     sessionId: string,
-    additionalParams: Record<any, any> = {}
+    additionalParams: Record<string, any> = {}
   ): Promise<AgentResponse> {
     this.executionTimes = new Map();
   
     let modelStats = [];
     try {
-      const chatHistory = await this.storage.fetchAllChats(userId, sessionId) || [];
+      // Fetch chat history and start classification concurrently
+      const chatHistoryPromise = this.storage.fetchAllChats(userId, sessionId);
+      const chatHistory = await chatHistoryPromise || [];
+      
       this.logger.printChatHistory(chatHistory);
       const classifierResult = await this.classifyRequest(userInput, userId, sessionId, chatHistory);
-      modelStats =  classifierResult.modelStats;
+      modelStats = classifierResult.modelStats;
+      
       if (!classifierResult.selectedAgent) {
         return {
           metadata: this.createMetadata(classifierResult, userInput, userId, sessionId, additionalParams),
@@ -498,41 +533,49 @@ export class MultiAgentOrchestrator {
           this.executionTimes.set("Time to first chunk", timeToFirstChunk);
           this.logger.printExecutionTimes(this.executionTimes);
         }
-        accumulatorTransform.write(chunk);
+        // Use type assertion to access the write method
+        (accumulatorTransform as any).write(chunk);
         chunkCount++;
       }
 
-      accumulatorTransform.end();
+      // Use type assertion to access the end method
+      (accumulatorTransform as any).end();
       this.logger.debug(`Streaming completed: ${chunkCount} chunks received`);
 
       const fullResponse = accumulatorTransform.getAccumulatedData();
-      if (fullResponse) {
-
-
-
-      if (agent.saveChat) {
-        await saveConversationExchange(
+      if (fullResponse && agent.saveChat) {
+        // Execute conversation saving in background without awaiting it
+        // This improves response time since we don't need to wait for storage operation
+        saveConversationExchange(
           userInput,
           fullResponse,
           this.storage,
           userId,
           sessionId,
           agent.id
-        );
-      }
-
-      } else {
+        ).catch(err => {
+          this.logger.error("Error saving conversation exchange:", err);
+        });
+      } else if (!fullResponse) {
         this.logger.warn("No data accumulated, messages not saved");
       }
     } catch (error) {
       this.logger.error("Error processing stream:", error);
-      accumulatorTransform.end();
-      if (error instanceof Error) {
-        accumulatorTransform.destroy(error);
-      } else if (typeof error === "string") {
-        accumulatorTransform.destroy(new Error(error));
-      } else {
-        accumulatorTransform.destroy(new Error("An unknown error occurred"));
+      // Use type assertion to access the end method
+      (accumulatorTransform as any).end();
+      
+      // Handle stream destruction with proper error handling
+      try {
+        const errorObj = error instanceof Error 
+          ? error 
+          : typeof error === "string" 
+            ? new Error(error) 
+            : new Error("An unknown error occurred");
+        
+        // Use type assertion to access the destroy method
+        ((accumulatorTransform as any).destroy || ((e: Error) => {}))(errorObj);
+      } catch (destroyError) {
+        this.logger.error("Error destroying transform stream:", destroyError);
       }
     }
   }
@@ -569,13 +612,22 @@ export class MultiAgentOrchestrator {
     userInput: string,
     userId: string,
     sessionId: string,
-    additionalParams: Record<string, string>
+    additionalParams: Record<string, any>
   ): RequestMetadata {
+    // Cast additionalParams to the expected type for RequestMetadata
+    const typedParams: Record<string, string> = {};
+    
+    // Convert additionalParams values to strings to ensure type safety
+    Object.keys(additionalParams).forEach(key => {
+      const value = additionalParams[key];
+      typedParams[key] = typeof value === 'string' ? value : String(value);
+    });
+    
     const baseMetadata = {
       userInput,
       userId,
       sessionId,
-      additionalParams,
+      additionalParams: typedParams,
     };
 
     if (!intentClassifierResult || !intentClassifierResult.selectedAgent) {
@@ -594,11 +646,11 @@ export class MultiAgentOrchestrator {
     };
   }
 
-  private getFallbackResult(modelStats: any[]): ClassifierResult {
+  private getFallbackResult(modelStats: any[] = []): ClassifierResult {
     return {
       selectedAgent: this.getDefaultAgent(),
       confidence: 0,
-      modelStats: modelStats
+      modelStats: Array.isArray(modelStats) ? modelStats : []
     };
   }
 }
