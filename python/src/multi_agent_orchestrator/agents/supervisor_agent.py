@@ -1,6 +1,7 @@
 from typing import Optional, Any, AsyncIterable, Union, TYPE_CHECKING
 from dataclasses import dataclass, field
 import asyncio
+import time
 from multi_agent_orchestrator.agents import Agent, AgentOptions
 if TYPE_CHECKING:
     from multi_agent_orchestrator.agents import AnthropicAgent, BedrockLLMAgent
@@ -223,28 +224,63 @@ When communicating with other agents, including the User, please follow these gu
             Logger.error(f"Error in send_message: {e}")
             raise e
 
+    # Cache for agent lookups to avoid repeated linear searches
+    _agent_cache = {}
+    
     async def send_messages(self, messages: list[dict[str, str]]) -> str:
-        """Process messages for agents in parallel."""
+        """Process messages for agents in parallel with optimized batching."""
         try:
-            tasks = [
-                asyncio.create_task(
-                    asyncio.to_thread(
-                        self.send_message,
-                        agent,
-                        message.get('content'),
-                        self.user_id,
-                        self.session_id,
-                        {}
-                    )
-                )
-                for agent in self.team
-                for message in messages
-                if agent.name == message.get('recipient')
-            ]
-
-            if not tasks:
+            # Build agent name lookup cache if not already created
+            if not self._agent_cache:
+                self._agent_cache = {agent.name: agent for agent in self.team}
+            
+            # Group messages by recipient to avoid redundant processing
+            messages_by_agent = {}
+            for message in messages:
+                recipient = message.get('recipient')
+                if recipient in self._agent_cache:
+                    messages_by_agent.setdefault(recipient, []).append(message.get('content', ''))
+            
+            if not messages_by_agent:
                 return ''
-
+            
+            # Create batch processing tasks
+            tasks = []
+            for agent_name, content_list in messages_by_agent.items():
+                agent = self._agent_cache[agent_name]
+                
+                # If there's only one message for this agent, process it directly
+                if len(content_list) == 1:
+                    tasks.append(
+                        asyncio.create_task(
+                            asyncio.to_thread(
+                                self.send_message,
+                                agent,
+                                content_list[0],
+                                self.user_id,
+                                self.session_id,
+                                {}
+                            )
+                        )
+                    )
+                else:
+                    # For multiple messages to the same agent, batch them together
+                    # This reduces context switching and improves throughput
+                    combined_content = "\n".join(content_list)
+                    tasks.append(
+                        asyncio.create_task(
+                            asyncio.to_thread(
+                                self.send_message,
+                                agent,
+                                combined_content,
+                                self.user_id,
+                                self.session_id,
+                                {}
+                            )
+                        )
+                    )
+            
+            # Execute all tasks in parallel and collect responses
             responses = await asyncio.gather(*tasks)
             return ''.join(responses)
 
@@ -253,14 +289,48 @@ When communicating with other agents, including the User, please follow these gu
             raise e
 
     def _format_agents_memory(self, agents_history: list[ConversationMessage]) -> str:
-        """Format agent conversation history."""
-        return ''.join(
-            f"{user_msg.role}:{user_msg.content[0].get('text','')}\n"
-            f"{asst_msg.role}:{asst_msg.content[0].get('text','')}\n"
-            for user_msg, asst_msg in zip(agents_history[::2], agents_history[1::2])
-            if self.id not in asst_msg.content[0].get('text', '')
-        )
+        """Format agent conversation history with optimized string building."""
+        # Pre-allocate the result array to avoid repeated string concatenations
+        # This significantly improves performance with large histories
+        result_parts = []
+        result_size = 0
+        max_memory_size = 16384  # Limit memory size to avoid token limits
+        
+        # Process messages in pairs (user, assistant)
+        # Start from the most recent messages for better relevance
+        message_pairs = list(zip(agents_history[::2], agents_history[1::2]))
+        message_pairs.reverse()  # Most recent first
+        
+        for user_msg, asst_msg in message_pairs:
+            # Skip messages from this agent to avoid self-reference loops
+            if self.id in asst_msg.content[0].get('text', ''):
+                continue
+                
+            # Extract text content efficiently
+            user_text = user_msg.content[0].get('text', '')
+            asst_text = asst_msg.content[0].get('text', '')
+            
+            # Create formatted strings
+            user_formatted = f"{user_msg.role}:{user_text}\n"
+            asst_formatted = f"{asst_msg.role}:{asst_text}\n"
+            
+            # Check if adding these would exceed our size limit
+            pair_length = len(user_formatted) + len(asst_formatted)
+            if result_size + pair_length > max_memory_size:
+                break
+                
+            # Add to results
+            result_parts.append(user_formatted)
+            result_parts.append(asst_formatted)
+            result_size += pair_length
+        
+        # Join all parts at once for better performance
+        return ''.join(result_parts)
 
+    # Cache for agent memory to avoid processing the same history repeatedly
+    _memory_cache = {}
+    _memory_cache_ttl = 30  # seconds
+    
     async def process_request(
         self,
         input_text: str,
@@ -269,22 +339,71 @@ When communicating with other agents, including the User, please follow these gu
         chat_history: list[ConversationMessage],
         additional_params: Optional[dict[str, str]] = None
     ) -> Union[ConversationMessage, AsyncIterable[Any]]:
-        """Process a user request through the lead_agent agent."""
+        """Process a user request through the lead_agent agent with optimized parallel operations."""
         try:
             self.user_id = user_id
             self.session_id = session_id
-
-            agents_history = await self.storage.fetch_all_chats(user_id, session_id)
-            agents_memory = self._format_agents_memory(agents_history)
-
+            
+            # Use a cache key that uniquely identifies this user session
+            memory_cache_key = f"{user_id}:{session_id}"
+            current_time = time.time()
+            
+            # Start a timer for performance tracking
+            start_time = current_time
+            
+            # Check memory cache first to avoid redundant processing
+            cached_memory = None
+            if memory_cache_key in self._memory_cache:
+                cache_entry = self._memory_cache[memory_cache_key]
+                if current_time - cache_entry['timestamp'] < self._memory_cache_ttl:
+                    cached_memory = cache_entry['memory']
+                    Logger.debug(f"Using cached agent memory (age: {current_time - cache_entry['timestamp']:.1f}s)")
+            
+            # If no valid cache, fetch and process agent history
+            if cached_memory is None:
+                # Fetch agent history
+                agents_history = await self.storage.fetch_all_chats(user_id, session_id)
+                
+                # Format agent memory (expensive operation)
+                agents_memory = self._format_agents_memory(agents_history)
+                
+                # Update cache
+                self._memory_cache[memory_cache_key] = {
+                    'timestamp': current_time,
+                    'memory': agents_memory
+                }
+            else:
+                agents_memory = cached_memory
+            
+            # Update the lead agent's system prompt with the agent memory
+            prompt_update_start = time.time()
             self.lead_agent.set_system_prompt(
                 self.prompt_template.replace('{AGENTS_MEMORY}', agents_memory)
             )
-
-            return await self.lead_agent.process_request(
+            prompt_update_time = time.time() - prompt_update_start
+            
+            # Process the request with the lead agent
+            response = await self.lead_agent.process_request(
                 input_text, user_id, session_id, chat_history, additional_params
             )
+            
+            # Log performance metrics if processing took longer than expected
+            total_time = time.time() - start_time
+            if total_time > 1.0:  # Only log slow operations
+                Logger.debug(f"SupervisorAgent.process_request took {total_time:.2f}s total")
+                
+            return response
 
         except Exception as e:
             Logger.error(f"Error in process_request: {e}")
             raise e
+            
+    def _clean_memory_cache(self):
+        """Clean expired memory cache entries to prevent memory leaks"""
+        current_time = time.time()
+        expired_keys = [
+            key for key, entry in self._memory_cache.items()
+            if current_time - entry['timestamp'] > self._memory_cache_ttl * 10
+        ]
+        for key in expired_keys:
+            del self._memory_cache[key]

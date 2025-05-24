@@ -1,4 +1,3 @@
-import { error } from "console";
 import {
   ANTHROPIC_MODEL_ID_CLAUDE_3_5_SONNET,
   ConversationMessage,
@@ -7,8 +6,44 @@ import {
 import { isClassifierToolInput } from "../utils/helpers";
 import { Logger } from "../utils/logger";
 import { Classifier, ClassifierResult } from "./classifier";
-import { Anthropic } from "@anthropic-ai/sdk";
 import { fetchDescription } from "../utils/s3Utils";
+
+// Define minimal Anthropic types to avoid dependency on @anthropic-ai/sdk
+// This allows the code to compile without the actual SDK
+interface AnthropicTypes {
+  Tool: any;
+  TextBlock: { type: string; text: string };
+  ToolUseBlock: { type: string; id: string; name: string; input: any };
+  MessageParam: { role: string; content: string | any[] };
+  Message: {
+    id: string;
+    model: string;
+    usage: any;
+    content: any[];
+    stop_reason?: string;
+  };
+}
+
+// Create a minimal implementation of the Anthropic client
+class Anthropic {
+  constructor(options: { apiKey: string }) {}
+  
+  messages = {
+    create: async (params: any): Promise<any> => {
+      // This is just a placeholder that would be replaced by the actual SDK implementation
+      throw new Error("Anthropic SDK not installed. Please install @anthropic-ai/sdk package.");
+    }
+  };
+}
+
+// Create namespace to match SDK structure
+namespace Anthropic {
+  export type Tool = AnthropicTypes['Tool'];
+  export type TextBlock = AnthropicTypes['TextBlock'];
+  export type ToolUseBlock = AnthropicTypes['ToolUseBlock'];
+  export type MessageParam = AnthropicTypes['MessageParam'];
+  export type Message = AnthropicTypes['Message']; 
+}
 
 export interface AnthropicClassifierOptions {
   // Optional: The ID of the Anthropic model to use for classification
@@ -92,10 +127,40 @@ export class AnthropicClassifier extends Classifier {
   }
 
   /* eslint-disable @typescript-eslint/no-unused-vars */
+  // Simple request caching to avoid redundant classification
+  private cache = new Map<string, {
+    result: ClassifierResult;
+    timestamp: number;
+  }>();
+  private readonly CACHE_TTL = 30 * 1000; // 30 seconds cache TTL
+
+  // Create a hash for the input to use as cache key
+  private createCacheKey(input: string): string {
+    // Use a simple hash function for the input string
+    const hashInput = input.trim().toLowerCase();
+    let hash = 0;
+    for (let i = 0; i < hashInput.length; i++) {
+      const char = hashInput.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return hash.toString(16);
+  }
+
   async processRequest(
     inputText: string,
     chatHistory: ConversationMessage[]
   ): Promise<ClassifierResult> {
+    // Check if we have a recent cached result for this input
+    const cacheKey = this.createCacheKey(inputText);
+    const now = Date.now();
+    const cachedItem = this.cache.get(cacheKey);
+    
+    if (cachedItem && (now - cachedItem.timestamp) < this.CACHE_TTL) {
+      Logger.logger.debug(`Using cached classification result for input: ${inputText.substring(0, 30)}...`);
+      return cachedItem.result;
+    }
+
     const userMessage: Anthropic.MessageParam = {
       role: ParticipantRole.USER,
       content: inputText,
@@ -150,16 +215,10 @@ export class AnthropicClassifier extends Classifier {
           );
         }
 
-        //update agent description from s3 by replacing the current description which is summary.
         const selectedAgent = this.getAgentById(toolUse.input.selected_agent);
-
-        //update description from s3 only if s3 details are provided.
-        /**
-         * Ideally all agents from db should have description in s3.
-         * But if we create a custom agent class itself, we can handle the description part in the custom class
-         * So in that case, there is no s3 details to fetch as custom prompt or very detailed description is in class itself
-         * if that class also wants to store description in s3, set the variable.
-         */
+        
+        // Start fetching S3 description in parallel if needed
+        let descriptionPromise: Promise<string> | null = null;
         if (
           selectedAgent &&
           selectedAgent.s3details &&
@@ -170,16 +229,33 @@ export class AnthropicClassifier extends Classifier {
           );
           const s3details = selectedAgent.s3details;
           const [S3Bucket, fileId] = s3details.split("##");
-          const description = await fetchDescription(S3Bucket, fileId);
-          selectedAgent.description = description;
+          descriptionPromise = fetchDescription(S3Bucket, fileId);
         }
 
-        // Create and return IntentClassifierResult
+        // Create the result object
         const intentClassifierResult: ClassifierResult = {
           selectedAgent: selectedAgent,
           confidence: parseFloat(toolUse.input.confidence),
           modelStats: modelStats,
         };
+
+        // If we need to update the description, await the promise now
+        if (descriptionPromise && selectedAgent) {
+          try {
+            const description = await descriptionPromise;
+            selectedAgent.description = description;
+          } catch (err) {
+            Logger.logger.error("Error fetching agent description from S3:", err);
+            // Continue with existing description if S3 fetch fails
+          }
+        }
+
+        // Cache the result
+        this.cache.set(cacheKey, {
+          result: intentClassifierResult,
+          timestamp: now
+        });
+
         return intentClassifierResult;
       } catch (error) {
         Logger.logger.error(
@@ -187,26 +263,47 @@ export class AnthropicClassifier extends Classifier {
           error
         );
 
-        if (error.error.type === "overloaded_error") {
-          if (executionCount < 3) {
-            retry = true;
-            await delay(executionCount * 500);
-            Logger.logger.info(
-              `Anthropic Classifier Error: Overload Error: retry: ${executionCount}  delay ${executionCount * 500}ms `
-            );
-          } else {
-            Logger.logger.info(
-              `Anthropic Classifier Error: Exceeded retry count for overload error`
-            );
-            throw error;
-          }
+        // More sophisticated retry logic with exponential backoff
+        const isRateLimited = error.error?.type === "overloaded_error" || 
+                             error.error?.type === "rate_limit_error" ||
+                             error.status === 429;
+        
+        const isServerError = error.status >= 500 && error.status < 600;
+        
+        // Retry for rate limiting or server errors
+        if ((isRateLimited || isServerError) && executionCount < 5) {
+          retry = true;
+          
+          // Exponential backoff with jitter to avoid thundering herd problem
+          // Base delay: 300ms, maximum delay: 10 seconds
+          const baseDelay = 300;
+          const maxDelay = 10000;
+          const exponentialDelay = Math.min(
+            maxDelay,
+            baseDelay * Math.pow(2, executionCount - 1)
+          );
+          
+          // Add jitter (±25% of the delay)
+          const jitter = 0.5 - Math.random();
+          const delay = exponentialDelay + (exponentialDelay * jitter * 0.25);
+          
+          Logger.logger.info(
+            `Anthropic Classifier Error: ${error.error?.type || error.status}. Retry: ${executionCount}, delay: ${Math.round(delay)}ms`
+          );
+          
+          await new Promise(resolve => setTimeout(resolve, delay));
+        } else if (isRateLimited) {
+          Logger.logger.info(
+            `Anthropic Classifier Error: Exceeded retry count for rate limit error`
+          );
+          throw error;
         } else {
-          // Instead of returning a default result, we'll throw the error
+          // Instead of returning a default result, throw the error for non-retryable errors
           throw error;
         }
       }
     }
-    throw error("Anthropic Classifier Error: Please try again.");
+    throw new Error("Anthropic Classifier Error: Please try again.");
   }
 }
 

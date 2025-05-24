@@ -139,37 +139,67 @@ class AnthropicAgent(Agent):
                 final_message = ''
                 tool_use = True
                 recursions = self.tool_config.get('toolMaxRecursions', self.default_max_recursions)
-
+                
+                # Optimize tool handling loop to avoid unnecessary work
+                tools_provider = self.tool_config["tool"]
+                use_tool_handler = self.tool_config.get('useToolHandler')
+                
+                if not use_tool_handler and isinstance(tools_provider, AgentTools):
+                    # Pre-extract the tool handler function to avoid lookups in the loop
+                    tool_handler_func = tools_provider.tool_handler
+                
+                # Add a counter for batch processing if needed
+                batch_size = 1  # Process one message at a time
+                tool_use_count = 0
+                
                 while tool_use and recursions > 0:
+                    start_time = time.time()
+                    
                     if self.streaming:
                         response = await self.handle_streaming_response(input)
                     else:
                         response = await self.handle_single_response(input)
-
+                    
+                    # Fast path: Check stop_reason first to potentially exit loop early
+                    if response.stop_reason == 'end_turn':
+                        # Get text content first since this is the last iteration
+                        text_content = next((content for content in response.content if content.type == 'text'), None)
+                        final_message = text_content.text if text_content else ''
+                        break  # Exit loop early
+                    
+                    # Optimized tool use block detection - filter once and store result
                     tool_use_blocks = [content for content in response.content if content.type == 'tool_use']
-
+                    
                     if tool_use_blocks:
+                        tool_use_count += 1
                         input['messages'].append({"role": "assistant", "content": response.content})
-                        if not self.tool_config:
-                            raise ValueError("No tools available for tool use")
-
-                        if self.tool_config.get('useToolHandler'):
-                            # user is handling the tool blocks itself
-                            tool_response = await self.tool_config['useToolHandler'](response, input['messages'])
+                        
+                        # Process tool use
+                        if use_tool_handler:
+                            # User-provided handler
+                            tool_response = await use_tool_handler(response, input['messages'])
                         else:
-                            tools:AgentTools = self.tool_config["tool"]
-                            # no handler has been provided, we can use the default implementation
-                            tool_response = await tools.tool_handler(AgentProviderType.ANTHROPIC.value, response, messages)
+                            # Default implementation - with pre-extracted handler
+                            tool_response = await tool_handler_func(
+                                AgentProviderType.ANTHROPIC.value, 
+                                response, 
+                                messages
+                            )
+                            
                         input['messages'].append(tool_response)
                         tool_use = True
                     else:
+                        # Extract text content if no tool use
                         text_content = next((content for content in response.content if content.type == 'text'), None)
                         final_message = text_content.text if text_content else ''
-
-                    if response.stop_reason == 'end_turn':
                         tool_use = False
-
+                    
                     recursions -= 1
+                    
+                    # Log performance data for debugging if needed
+                    processing_time = time.time() - start_time
+                    if processing_time > 1.0:  # Log only slow iterations (> 1 second)
+                        Logger.debug(f"Tool processing iteration took {processing_time:.2f}s")
 
                 return ConversationMessage(role=ParticipantRole.ASSISTANT.value, content=[{'text': final_message}])
             else:
