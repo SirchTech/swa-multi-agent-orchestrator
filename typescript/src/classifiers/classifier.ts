@@ -29,6 +29,7 @@ export abstract class Classifier {
   protected agentDescriptions: string;
   protected agents: { [key: string]: Agent };
   protected history: string;
+  protected summary: string;
   protected promptTemplate: string;
   protected systemPrompt: string;
   protected customVariables: TemplateVariables;
@@ -44,6 +45,7 @@ export abstract class Classifier {
 
     this.agentDescriptions = "";
     this.history = "";
+    this.summary =  "";
     this.customVariables = {};
     this.promptTemplate = `
 You are AgentMatcher, an intelligent assistant designed to analyze user queries and match them with the most suitable agent or department. Your task is to understand the user's request, identify key entities and intents, and determine which agent or department would be best equipped to handle the query.
@@ -74,7 +76,13 @@ Guidelines for classification:
 
 Handle variations in user input, including different phrasings, synonyms, and potential spelling errors. For short responses like "yes", "ok", "I want to know more", or numerical answers, treat them as follow-ups and maintain the previous agent selection.
 
-Here is the conversation history that you need to take into account before answering:
+Here is a summary of old conversation that you need to account for before answering. Note that it could be empty if there is no summary so far.
+<summary>
+{{SUMMARY}}
+</summary>
+
+
+Here is the latest conversation history, after the summary that you need to take into account before answering:
 <history>
 {{HISTORY}}
 </history>
@@ -140,6 +148,10 @@ Skip any preamble and provide only the response in the specified format.
     this.history = this.formatMessages(messages);
   }
 
+  setSummary(summary: string): void{
+    this.summary = summary;
+  }
+
   setSystemPrompt(template?: string, variables?: TemplateVariables): void {
     if (template) {
       this.promptTemplate = template;
@@ -176,13 +188,15 @@ Skip any preamble and provide only the response in the specified format.
    */
     async classify(
       inputText: string,
-      chatHistory: ConversationMessage[]
+      chatHistory: ConversationMessage[],
+      chatSummary?: string
     ): Promise<ClassifierResult> {
       // Set the chat history
       this.setHistory(chatHistory);
+      this.setSummary(chatSummary);
       // Update the system prompt with the latest history, agent descriptions, and custom variables
       this.updateSystemPrompt();
-      return await this.processRequest(inputText, chatHistory);
+      return await this.processRequest(inputText, chatHistory, chatSummary);
     }
 
     /**
@@ -195,7 +209,8 @@ Skip any preamble and provide only the response in the specified format.
      */
     abstract processRequest(
       inputText: string,
-      chatHistory: ConversationMessage[]
+      chatHistory: ConversationMessage[],
+      chatSummary?: string
     ): Promise<ClassifierResult>;
 
 
@@ -204,6 +219,7 @@ Skip any preamble and provide only the response in the specified format.
       ...this.customVariables,
       AGENT_DESCRIPTIONS: this.agentDescriptions,
       HISTORY: this.history,
+      SUMMARY: this.summary
     };
 
     this.systemPrompt = this.replaceplaceholders(

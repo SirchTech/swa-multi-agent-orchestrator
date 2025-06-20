@@ -154,6 +154,7 @@ abstract processRequest(
   sessionId: string,
   chatHistory: ConversationMessage[],
   additionalParams?: Record<string, string>,
+  chatSummary?: string
 ): Promise<ConversationMessage | AsyncIterable<any>>;
 
 }

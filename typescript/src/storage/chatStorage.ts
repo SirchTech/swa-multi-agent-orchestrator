@@ -1,4 +1,5 @@
 import { ConversationMessage } from "../types";
+import { SummaryUtils } from "../utils/summaryUtils";
 
 export abstract class ChatStorage {
 
@@ -16,6 +17,18 @@ export abstract class ChatStorage {
     
     return conversation.slice(-adjustedMaxHistorySize);
   }
+
+  public async fetchSummary(userId: string, sessionId: string): Promise<string | null> {
+    return `Override Summary implement for ${userId}${sessionId}`
+  }
+
+  public async summarizeAndTruncate(
+      userId: string,
+      sessionId: string,
+      summaryUtils: SummaryUtils
+    ): Promise<void> {
+      console.log(`Over rider for summary and truncate : ${userId}${sessionId} ${summaryUtils}`)
+    }
 
   abstract saveChatMessage(
     userId: string,

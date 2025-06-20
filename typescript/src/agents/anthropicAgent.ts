@@ -241,7 +241,8 @@ export class AnthropicAgent extends Agent {
     userId: string,
     sessionId: string,
     chatHistory: ConversationMessage[],
-    _additionalParams?: Record<string, string>
+    _additionalParams?: Record<string, string>,
+    chatSummary?: string
   ): Promise<ConversationMessage | AsyncIterable<any>> {
     // Format messages to Anthropic's format
     const messages: Anthropic.MessageParam[] = chatHistory.map((message) => ({
@@ -257,6 +258,10 @@ export class AnthropicAgent extends Agent {
     const modelStats = [];
 
     let systemPrompt = this.systemPrompt;
+
+    if(chatSummary){
+      systemPrompt = systemPrompt + `\n\n. A summary of the conversation so far is given below. use this and messages to give a proper answer. \n ${chatSummary}`
+    }
 
     // Update the system prompt with the latest history, agent descriptions, and custom variables
     if (this.retriever) {

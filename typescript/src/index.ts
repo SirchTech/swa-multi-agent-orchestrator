@@ -34,3 +34,5 @@ export { AgentOverlapAnalyzer, AnalysisResult } from "./agentOverlapAnalyzer";
 export { ConversationMessage, ParticipantRole } from "./types"
 
 export { isClassifierToolInput, isConversationMessage } from './utils/helpers'
+
+export { SummaryUtils } from "./utils/summaryUtils"

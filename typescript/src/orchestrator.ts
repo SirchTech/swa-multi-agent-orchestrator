@@ -141,6 +141,8 @@ export interface DispatchToAgentsParams {
   additionalParams?: Record<string, any>;
 
   chatHistory?: ConversationMessage[]
+
+  chatSummary?: string
 }
 
 /**
@@ -279,7 +281,8 @@ export class MultiAgentOrchestrator {
       sessionId,
       classifierResult,
       additionalParams = {},
-      chatHistory
+      chatHistory,
+      chatSummary
     } = params;
 
     try {
@@ -316,7 +319,8 @@ export class MultiAgentOrchestrator {
           userId,
           sessionId,
           chatHistory,
-          additionalParams
+          additionalParams,
+          chatSummary
         )
 
         //if (this.isStream(response)) {
@@ -355,7 +359,8 @@ export class MultiAgentOrchestrator {
     userInput: string,
     userId: string,
     sessionId: string, 
-    chatHistory: ConversationMessage[]
+    chatHistory: ConversationMessage[],
+    chatSummary?: string
   ): Promise<ClassifierResult> {
     try {
       // const chatHistory = await this.storage.fetchAllChats(userId, sessionId) || [];
@@ -365,7 +370,7 @@ export class MultiAgentOrchestrator {
       // );
 
       this.logger.info("Classifying user intent");
-      const classifierResult = await this.classifier.classify(userInput, chatHistory);
+      const classifierResult = await this.classifier.classify(userInput, chatHistory, chatSummary);
       
   
       this.logger.printIntent(userInput, classifierResult);
@@ -389,7 +394,8 @@ export class MultiAgentOrchestrator {
     sessionId: string,
     classifierResult: ClassifierResult,
     additionalParams: Record<any, any> = {},
-    chatHistory: ConversationMessage[]
+    chatHistory: ConversationMessage[],
+    chatSummary?: string
   ): Promise<AgentResponse> {
     try {
       const agentResponse = await this.dispatchToAgent({
@@ -398,7 +404,8 @@ export class MultiAgentOrchestrator {
         sessionId,
         classifierResult,
         additionalParams,
-        chatHistory
+        chatHistory,
+        chatSummary
       });
   
       const metadata = this.createMetadata(classifierResult, userInput, userId, sessionId, additionalParams);
@@ -458,7 +465,10 @@ export class MultiAgentOrchestrator {
     try {
       const chatHistory = await this.storage.fetchAllChats(userId, sessionId) || [];
       this.logger.printChatHistory(chatHistory);
-      const classifierResult = await this.classifyRequest(userInput, userId, sessionId, chatHistory);
+      const chatSummary = await this.storage.fetchSummary(userId, sessionId)|| "";
+      this.logger.info(`Fetched summary : ${chatSummary}`);
+
+      const classifierResult = await this.classifyRequest(userInput, userId, sessionId, chatHistory, chatSummary);
       modelStats =  classifierResult.modelStats;
       if (!classifierResult.selectedAgent) {
         return {
@@ -469,7 +479,7 @@ export class MultiAgentOrchestrator {
         };
       }
   
-      return await this.agentProcessRequest(userInput, userId, sessionId, classifierResult, additionalParams, chatHistory);
+      return await this.agentProcessRequest(userInput, userId, sessionId, classifierResult, additionalParams, chatHistory, chatSummary);
     } catch (error) {
       return {
         metadata: this.createMetadata(null, userInput, userId, sessionId, additionalParams),

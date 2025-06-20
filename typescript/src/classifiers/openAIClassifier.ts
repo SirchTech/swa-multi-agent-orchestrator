@@ -100,7 +100,8 @@ export class OpenAIClassifier extends Classifier {
   /* eslint-disable @typescript-eslint/no-unused-vars */
   async processRequest(
     inputText: string,
-    chatHistory: ConversationMessage[]
+    chatHistory: ConversationMessage[],
+    chatSummary: string
   ): Promise<ClassifierResult> {
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       {

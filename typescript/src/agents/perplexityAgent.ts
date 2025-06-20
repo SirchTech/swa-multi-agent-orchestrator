@@ -119,13 +119,19 @@ export class PerplexityAgent extends Agent {
         inputText: string,
         userId: string,
         sessionId: string,
-        chatHistory: ConversationMessage[]
+        chatHistory: ConversationMessage[],
+        _additionalParams?: Record<string, string>,
+        chatSummary?: string
       ): Promise<ConversationMessage | AsyncIterable<any>> {
 
 
         this.updateSystemPrompt();
 
     let systemPrompt = this.systemPrompt;
+
+    if(chatSummary){
+      systemPrompt = systemPrompt + `\n\n. A summary of the conversation so far is given below. use this and messages to give a proper answer. \n ${chatSummary}`
+    }
 
     if (this.retriever) {
       // retrieve from Vector store

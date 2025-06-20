@@ -94,7 +94,8 @@ export class AnthropicClassifier extends Classifier {
   /* eslint-disable @typescript-eslint/no-unused-vars */
   async processRequest(
     inputText: string,
-    chatHistory: ConversationMessage[]
+    chatHistory: ConversationMessage[],
+    chatSummary: string
   ): Promise<ClassifierResult> {
     const userMessage: Anthropic.MessageParam = {
       role: ParticipantRole.USER,
