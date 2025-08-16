@@ -358,11 +358,6 @@ export class MultiAgentOrchestrator {
     chatHistory: ChatHistory
   ): Promise<ClassifierResult[]> {
     try {
-      // const chatHistory = await this.storage.fetchAllChats(userId, sessionId) || [];
-      // const classifierResult = await this.measureExecutionTime(
-      //   "Classifying user intent",
-      //   () => this.classifier.classify(userInput, chatHistory)
-      // );
 
       this.logger.info("Classifying user intent");
       let classifierResults;
@@ -466,7 +461,8 @@ export class MultiAgentOrchestrator {
   
     // let modelStats = [];
     try {
-      const chatHistory = await this.storage.fetchAllChats(userId, sessionId, userInput) ||  { messages : []} ;
+      //using actual query to do a search. Reason is file uploads causes userinput to be too large.
+      const chatHistory = await this.storage.fetchAllChats(userId, sessionId, additionalParams.query) ||  { messages : []} ;
       this.logger.printChatHistory(chatHistory.messages);
       this.logger.info(`Chat Summary: ${chatHistory.summary}`);
       const classifierResults = await this.classifyRequest(userInput, userId, sessionId, chatHistory);

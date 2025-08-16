@@ -24,8 +24,9 @@ export class PineconeStorage extends ChatStorage {
   private vectorUtils: VectorUtils;
   private llmUtils: LLMUtils;
   private maxCount: number;
+  private debugLog: boolean;
 
-  constructor(indexName: string, llmUtils: LLMUtils, maxCount: number) {
+  constructor(indexName: string, llmUtils: LLMUtils, maxCount: number, debugLog: boolean) {
     super();
     this.client = new Pinecone({
       apiKey: process.env['PINECONE_KEY'],
@@ -34,6 +35,7 @@ export class PineconeStorage extends ChatStorage {
     this.vectorUtils = new VectorUtils();
     this.llmUtils = llmUtils;
     this.maxCount = maxCount || 20;
+    this.debugLog = debugLog || false;
   }
 
   async saveChatMessage(
@@ -84,7 +86,9 @@ export class PineconeStorage extends ChatStorage {
     const [channelId, threadTs] = this.parseSessionId(sessionId);
     Logger.logger.info(`Fetching All Chats: userid:${userId} channelid: ${channelId} threadTs:${threadTs}`);
     const context = await this.getRelevantContext(query, userId, channelId, threadTs, this.maxCount);
-
+    if(this.debugLog){
+      Logger.logger.info(`Pinecone-> Context Retreived: `, context);
+    }
     const messages = context.messages.map(msg => ({
       role: msg.metadata?.messageType === 'user' ? ParticipantRole.USER : ParticipantRole.ASSISTANT,
       content: [{ text: msg.metadata?.content }],
@@ -137,6 +141,9 @@ export class PineconeStorage extends ChatStorage {
 
       // Add recent fallback messages
       const recentMessages = await this.getRecentMessages(contextId, maxResults - messages.length);
+      if(this.debugLog){
+        Logger.logger.info(`Pinecone-> Recent Messages: `, recentMessages);
+      }
       const combined = [...messages, ...recentMessages];
       // Deduplicate by id
       const seen = new Set();
@@ -149,9 +156,15 @@ export class PineconeStorage extends ChatStorage {
       // Sort by timestamp
       uniqueMessages.sort((a, b) => (a.metadata?.timestamp || 0) - (b.metadata?.timestamp || 0));
 
+      if(this.debugLog){
+        Logger.logger.info(`Pinecone-> RecentCount: ${recentMessages.length} RelevantCount: ${messages.length} CombinedCount: ${combined.length} UniqueCount:${uniqueMessages.length} `);
+      }
+
       // Get summary
       const summary = await this.getContextSummary(contextId);
-
+      if(this.debugLog){
+        Logger.logger.info(`Pinecone-> Summary: `, summary);
+      }
       return {
         messages: uniqueMessages.slice(-maxResults),
         summary
