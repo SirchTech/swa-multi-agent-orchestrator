@@ -47,7 +47,7 @@ export class AccumulatorTransform extends Transform {
     return (
       typeof input === 'object' &&
       input !== null &&
-      'userinput' in input &&
+      'userInput' in input &&
       'selected_agent' in input &&
       'confidence' in input
     );

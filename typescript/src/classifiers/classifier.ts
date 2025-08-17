@@ -7,6 +7,10 @@ import {
 import { Agent } from "../agents/agent";
 
 export interface ClassifierResult {
+
+  //userInput specific to the agent selected.
+  userInput: string;
+
   // The agent selected by the classifier to handle the user's request
   selectedAgent: Agent;
 
@@ -64,6 +68,7 @@ Guidelines for classification:
 
     Agent Type: Choose the most appropriate agent or agents  based on the nature of the query. For follow-up responses, use the same agent type as the previous interaction.
     If user queries need multiple agents to be invoked, then given them as a list.
+    Split the user query into the relevant text needed only for the agent. Dont same content to all agents.
     Priority: Assign based on urgency and impact.
         High: Issues affecting service, billing problems, or urgent technical issues
         Medium: Non-urgent product inquiries, sales questions
@@ -95,7 +100,7 @@ Examples:
 1. Initial query with no context:
 User: "What are the symptoms of the flu?"
 
-userinput: What are the symptoms of the flu?
+userInput: What are the symptoms of the flu?
 selected_agent: agent-name
 confidence: 0.95
 
@@ -105,7 +110,7 @@ User: "How do I set up a wireless printer?"
 Assistant: [agent-a]: To set up a wireless printer, follow these steps: 1. Ensure your printer is Wi-Fi capable. 2. Connect the printer to your Wi-Fi network. 3. Install the printer software on your computer. 4. Add the printer to your computer's list of available printers. Do you need more detailed instructions for any of these steps?
 User: "Actually, I need to know about my account balance"
 
-userinput: Actually, I need to know about my account balance</userinput>
+userInput: Actually, I need to know about my account balance</userInput>
 selected_agent: agent-name
 confidence: 0.9
 
@@ -116,7 +121,7 @@ User: "What's the best way to lose weight?"
 Assistant: [agent-name-1]: The best way to lose weight typically involves a combination of a balanced diet and regular exercise. It's important to create a calorie deficit while ensuring you're getting proper nutrition. Would you like some specific tips on diet or exercise?
 User: "Yes, please give me some diet tips"
 
-userinput: Yes, please give me some diet tips
+userInput: Yes, please give me some diet tips
 selected_agent: agent-name-1
 confidence: 0.95
 
@@ -131,20 +136,32 @@ User: "I'm having trouble accessing my account"
 Assistant: [agenc-name-c]: I'm sorry to hear you're having trouble accessing your account. Let's try to resolve this issue. Can you tell me what specific error message or problem you're encountering when trying to log in?
 User: "It says my password is incorrect, but I'm sure it's right"
 
-userinput: It says my password is incorrect, but I'm sure it's right
+userInput: It says my password is incorrect, but I'm sure it's right
 selected_agent: agent-name-c
 confidence: 0.9
 
 5. Multiple agents based on single query
-User: :Analyze this image using and then summarize using grok"
+User: :Analyze this image using and then summarize using grok
 
 agents:
-userinput: Analyze this image using and then summarize using grok
+userInput: Analyze this image
 selected_agent: image-agent
 confidence: 0.95
 
-userinput: Analyze this image using and then summarize using grok
+userInput: summarize using grok
 selected_agent: grok
+confidence: 0.95
+
+6. Multi agent with multiple queries
+
+User: :Get me latest news and then summarize it using openai
+
+agents:Get me latest news
+selected_agent: live-agent
+confidence: 0.95
+
+userInput: summarize the data provided
+selected_agent: openai
 confidence: 0.95
 
 Skip any preamble and provide only the response in the specified format.

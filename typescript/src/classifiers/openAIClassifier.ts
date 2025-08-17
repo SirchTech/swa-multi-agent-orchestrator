@@ -50,7 +50,7 @@ export class OpenAIClassifier extends Classifier {
   //       parameters: {
   //         type: "object",
   //         properties: {
-  //           userinput: {
+  //           userInput: {
   //             type: "string",
   //             description: "The original user input",
   //           },
@@ -63,7 +63,7 @@ export class OpenAIClassifier extends Classifier {
   //             description: "Confidence level between 0 and 1",
   //           },
   //         },
-  //         required: ["userinput", "selected_agent", "confidence"],
+  //         required: ["userInput", "selected_agent", "confidence"],
   //       },
   //     },
   //   },
@@ -83,9 +83,9 @@ export class OpenAIClassifier extends Classifier {
               items: {
                 type: "object",
                 properties: {
-                userinput: {
+                  userInput: {
                   type: "string",
-                  description: "The original user input",
+                  description: "the user input that is valid for this agent. Split out the userInput to be relevant only for this agent.",
                 },
                 selected_agent: {
                   type: "string",
@@ -96,7 +96,7 @@ export class OpenAIClassifier extends Classifier {
                   description: "Confidence level between 0 and 1",
                 },
               },
-              required: ["userinput", "selected_agent", "confidence"],
+              required: ["userInput", "selected_agent", "confidence"],
               }
             }
           },
@@ -229,8 +229,9 @@ export class OpenAIClassifier extends Classifier {
             );
           }
           const intentClassifierResult: ClassifierResult = {
+            userInput: agent["userInput"],
             selectedAgent: selectedAgent,
-            confidence: parseFloat(toolInput.confidence),
+            confidence: parseFloat(agent.confidence),
             modelStats: modelStats,
           };
           classifiedResults.push(intentClassifierResult)

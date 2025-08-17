@@ -287,32 +287,21 @@ export class MultiAgentOrchestrator {
         return "I'm sorry, but I need more information to understand your request. Could you please be more specific?";
       } else {
         const { selectedAgent } = classifierResult;
-        // const agentChatHistory = await this.storage.fetchChat(
-        //   userId,
-        //   sessionId,
-        //   selectedAgent.id
-        // );
+        let inputToAgent = userInput;
 
-        // this.logger.printChatHistory(agentChatHistory, selectedAgent.id);
+        if(classifierResult.userInput && classifierResult.userInput.trim().length > 5){
+          this.logger.info(
+            `Updating agent input with classified input :  ${userInput} => ${classifierResult.userInput}`,
+          );
+          inputToAgent = classifierResult.userInput;
+        }
 
         this.logger.info(
-          `Routing intent "${userInput}" to ${selectedAgent.id} ...`
+          `Routing intent "${inputToAgent}" to ${selectedAgent.id} ...`
         );
 
-        // const response = await this.measureExecutionTime(
-        //   `Agent ${selectedAgent.name} | Processing request`,
-        //   async () =>
-        //     await selectedAgent.processRequest(
-        //       userInput,
-        //       userId,
-        //       sessionId,
-        //       agentChatHistory,
-        //       additionalParams
-        //     )
-        // );
-
         const response =  await selectedAgent.processRequest(
-          userInput,
+          inputToAgent,
           userId,
           sessionId,
           chatHistory,
@@ -367,7 +356,7 @@ export class MultiAgentOrchestrator {
         this.logger.error("There was an error during classification: ",e);
         this.logger.info("Default agent to be used due to an error");
         classifierResults=[];
-        const classifierResult=this.getFallbackResult(null);
+        const classifierResult=this.getFallbackResult(userInput, null);
         classifierResult["modelStats"]["from"] = "classifier_error";
         classifierResult["modelStats"]["usage"] = {};
         classifierResults.push(classifierResult);
@@ -377,7 +366,7 @@ export class MultiAgentOrchestrator {
         this.logger.printIntent(userInput, classifierResult);
         if (!classifierResult.selectedAgent && this.config.USE_DEFAULT_AGENT_IF_NONE_IDENTIFIED && this.defaultAgent) {
           this.logger.info("Using default agent as no agent was selected at index: ", index);
-          classifierResults[index]  = this.getFallbackResult(classifierResult.modelStats);;
+          classifierResults[index]  = this.getFallbackResult(userInput, classifierResult.modelStats);;
         }
       }
   
@@ -461,7 +450,7 @@ export class MultiAgentOrchestrator {
   
     // let modelStats = [];
     try {
-      //using actual query to do a search. Reason is file uploads causes userinput to be too large.
+      //using actual query to do a search. Reason is file uploads causes userInput to be too large.
       const chatHistory = await this.storage.fetchAllChats(userId, sessionId, additionalParams.query) ||  { messages : []} ;
       this.logger.printChatHistory(chatHistory.messages);
       this.logger.info(`Chat Summary: ${chatHistory.summary}`);
@@ -473,7 +462,6 @@ export class MultiAgentOrchestrator {
       const info = [];
       for(const classifierResult of classifierResults){
         agentResponse =  await this.agentProcessRequest(userInput, userId, sessionId, classifierResult, additionalParams, chatHistory);
-
         const updatedMessage = {} as ConversationMessage;
         updatedMessage["role"] = ParticipantRole.ASSISTANT;
         updatedMessage["content"] = [{"text":agentResponse.output}];
@@ -648,8 +636,9 @@ export class MultiAgentOrchestrator {
     };
   }
 
-  private getFallbackResult(m:[] | null | undefined ): ClassifierResult {
+  private getFallbackResult(userInput: string, m:[] | null | undefined ): ClassifierResult {
     return {
+      userInput: userInput,
       selectedAgent: this.getDefaultAgent(),
       confidence: 0,
       modelStats: m ?? []

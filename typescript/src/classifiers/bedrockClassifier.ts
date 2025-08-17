@@ -65,9 +65,9 @@ export class BedrockClassifier extends Classifier{
           json: {
             type: "object",
             properties: {
-              userinput: {
+              userInput: {
                 type: "string",
-                description: "The original user input",
+                description: "the user input that is valid for this agent. Split out the userInput to be relevant only for this agent.",
               },
               selected_agent: {
                 type: "string",
@@ -78,7 +78,7 @@ export class BedrockClassifier extends Classifier{
                 description: "Confidence level between 0 and 1",
               },
             },
-            required: ["userinput", "selected_agent", "confidence"],
+            required: ["userInput", "selected_agent", "confidence"],
           },
         },
       },
@@ -178,6 +178,7 @@ export class BedrockClassifier extends Classifier{
               }
 
               const intentClassifierResult: ClassifierResult = {
+                userInput: toolUse.input["userInput"],
                 selectedAgent: this.getAgentById(toolUse.input.selected_agent),
                 confidence: parseFloat(toolUse.input.confidence),
                 modelStats: []

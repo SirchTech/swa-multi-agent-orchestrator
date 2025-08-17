@@ -54,7 +54,7 @@ export class AnthropicClassifier extends Classifier {
   //     input_schema: {
   //       type: "object",
   //       properties: {
-  //         userinput: {
+  //         userInput: {
   //           type: "string",
   //           description: "The original user input",
   //         },
@@ -67,7 +67,7 @@ export class AnthropicClassifier extends Classifier {
   //           description: "Confidence level between 0 and 1",
   //         },
   //       },
-  //       required: ["userinput", "selected_agent", "confidence"],
+  //       required: ["userInput", "selected_agent", "confidence"],
   //     },
   //   },
   // ];
@@ -84,9 +84,9 @@ export class AnthropicClassifier extends Classifier {
             items: {
               type: "object",
               properties: {
-              userinput: {
+                userInput: {
                 type: "string",
-                description: "The original user input",
+                description: "the user input that is valid for this agent. Split out the userInput to be relevant only for this agent.",
               },
               selected_agent: {
                 type: "string",
@@ -97,7 +97,7 @@ export class AnthropicClassifier extends Classifier {
                 description: "Confidence level between 0 and 1",
               },
             },
-            required: ["userinput", "selected_agent", "confidence"],
+            required: ["userInput", "selected_agent", "confidence"],
             }
           }
         },
@@ -220,6 +220,7 @@ export class AnthropicClassifier extends Classifier {
 
                 // Create and return IntentClassifierResult
             const intentClassifierResult: ClassifierResult = {
+              userInput: agent["userInput"],
               selectedAgent: selectedAgent,
               confidence: parseFloat(agent.confidence),
               modelStats: modelStats,

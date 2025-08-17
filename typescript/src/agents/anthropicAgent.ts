@@ -280,95 +280,37 @@ export class AnthropicAgent extends Agent {
         return this.handleStreamingResponse(messages, systemPrompt, _additionalParams);
       } else {
         let finalMessage: string = "";
-        let toolUse = false;
-        let recursions = this.toolConfig?.toolMaxRecursions || this.defaultMaxRecursions;
-        do {
-          // Call Anthropic
-          const llmInput = {
-            model: this.modelId,
-            max_tokens: this.inferenceConfig.maxTokens,
-            messages: messages,
-            system: systemPrompt,
-            temperature: this.inferenceConfig.temperature,
-            top_p: this.inferenceConfig.topP,
-            ...(this.toolConfig && {
-              tools:
-                this.toolConfig.tool instanceof AgentTools
-                  ? this.formatTools(this.toolConfig.tool)
-                  : this.toolConfig.tool,
-            }),
-          };
-          if(this.logRequest){
-            console.log("\n\n---- Anthropic Agent ----");
-            console.log(JSON.stringify(llmInput));
-          }
-          const response = await this.handleSingleResponse(llmInput);
-          if(this.logRequest){
-            console.log(JSON.stringify(response));
-            console.log("\n\n");
-          }
-          const obj = {};
-          obj["id"] = response.id;
-          obj["model"] = response.model;
-          obj["usage"] = response.usage;
-          obj["from"] = "agent-anthropic";
-          modelStats.push(obj);
-          Logger.logger.info(`Anthropic Agent Usage: `, JSON.stringify(obj));
-         
+        // Call Anthropic
+        const llmInput = {
+          model: this.modelId,
+          max_tokens: this.inferenceConfig.maxTokens,
+          messages: messages,
+          system: systemPrompt,
+          temperature: this.inferenceConfig.temperature,
+          top_p: this.inferenceConfig.topP
+        };
+        if(this.logRequest){
+          console.log("\n\n---- Anthropic Agent ----");
+          console.log(JSON.stringify(llmInput));
+        }
+        const response = await this.handleSingleResponse(llmInput);
+        if(this.logRequest){
+          console.log(JSON.stringify(response));
+          console.log("\n\n");
+        }
+        const obj = {};
+        obj["id"] = response.id;
+        obj["model"] = response.model;
+        obj["usage"] = response.usage;
+        obj["from"] = "agent-anthropic";
+        modelStats.push(obj);
+        Logger.logger.info(`Anthropic Agent Usage: `, JSON.stringify(obj));
 
-          const toolUseBlocks = response.content.filter<Anthropic.ToolUseBlock>(
-            (content) => content.type === "tool_use"
+        const textContent = response.content.find(
+          (content): content is Anthropic.TextBlock =>
+            content.type === "text"
           );
-
-
-          if (toolUseBlocks.length > 0) {
-            // Append current response to the conversation
-            messages.push({
-              role: ParticipantRole.ASSISTANT,
-              content: response.content,
-            });
-
-            const tools = this.toolConfig.tool;
-            const toolHandler =
-              this.toolConfig.useToolHandler ??
-              (async (response, conversationHistory) => {
-                if (this.isAgentTools(tools)) {
-                  return tools.toolHandler(
-                    response,
-                    this.getToolUseBlock.bind(this),
-                    this.getToolName.bind(this),
-                    this.getToolId.bind(this),
-                    this.getInputData.bind(this)
-                  );
-                }
-                // Only use legacy handler when it's not AgentTools
-                return this.toolConfig.useToolHandler(
-                  response,
-                  conversationHistory,
-                  _additionalParams
-                );
-              });
-
-            const toolResponse = await toolHandler(response, messages, _additionalParams);
-            const formattedResponse = this.formatToolResults(toolResponse);
-
-            // Add the formatted response to messages
-            messages.push(formattedResponse);
-            toolUse = true;
-          } else {
-            const textContent = response.content.find(
-              (content): content is Anthropic.TextBlock =>
-                content.type === "text"
-            );
-            finalMessage = textContent?.text || "";
-          }
-
-          if (response.stop_reason === "end_turn") {
-            toolUse = false;
-          }
-
-          recursions--;
-        } while (toolUse && recursions > 0);
+        finalMessage = textContent?.text || "";
         return {
           role: ParticipantRole.ASSISTANT,
           content: [{ text: finalMessage }],

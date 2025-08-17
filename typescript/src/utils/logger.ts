@@ -80,7 +80,7 @@ export class Logger {
 
     this.logHeader('\n=====Classified Intent=====\n');
 
-    Logger.logger.info(`> Text: ${userInput}`);
+    Logger.logger.info(`> Text: ${userInput}: => ${intentClassifierResult.userInput}`);
     Logger.logger.info(`> Selected Agent: ${
       intentClassifierResult.selectedAgent
         ? intentClassifierResult.selectedAgent.name
