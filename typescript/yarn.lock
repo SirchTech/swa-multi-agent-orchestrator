@@ -3517,6 +3517,14 @@
     "@smithy/types" "^4.3.1"
     tslib "^2.6.2"
 
+"@swatechnology/swa-multi-agent-orchestrator@file:":
+  version "0.0.80"
+  resolved "file:"
+  dependencies:
+    "@pinecone-database/pinecone" "^6.1.1"
+    "@swatechnology/swa-multi-agent-orchestrator" "file:"
+    axios "^1.7.2"
+
 "@tsconfig/node10@^1.0.7":
   version "1.0.11"
   resolved "https://registry.npmjs.org/@tsconfig/node10/-/node10-1.0.11.tgz"

@@ -462,11 +462,7 @@ export class MultiAgentOrchestrator {
       const info = [];
       for(const classifierResult of classifierResults){
         agentResponse =  await this.agentProcessRequest(userInput, userId, sessionId, classifierResult, additionalParams, chatHistory);
-        const updatedMessage = {} as ConversationMessage;
-        updatedMessage["role"] = ParticipantRole.ASSISTANT;
-        updatedMessage["content"] = [{"text":agentResponse.output}];
-        chatHistory.messages.push(updatedMessage);
-
+        chatHistory.messages.push(...this.formatPreviousAgentResponse(classifierResult, agentResponse));
         this.combineAgentResponses(combinedMetadata, info, classifierResult, agentResponse);
       }
 
@@ -643,6 +639,22 @@ export class MultiAgentOrchestrator {
       confidence: 0,
       modelStats: m ?? []
      };
+  }
+
+  private formatPreviousAgentResponse(classifierResult: ClassifierResult, agentResponse: AgentResponse): ConversationMessage[] {
+
+    
+    const userMessage = {} as ConversationMessage;
+    userMessage["role"] = ParticipantRole.USER;
+    userMessage["content"] = [{"text":classifierResult.userInput}];
+
+    const assistantMessage = {} as ConversationMessage;
+    assistantMessage["role"] = ParticipantRole.ASSISTANT;
+    assistantMessage["content"] = [{"text":agentResponse.output}];
+
+    return [userMessage, assistantMessage];
+
+
   }
 
 }

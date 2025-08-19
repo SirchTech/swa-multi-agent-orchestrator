@@ -198,33 +198,40 @@ export class PineconeStorage extends ChatStorage {
       const contextId = this.generateContextId(message);
       const contextType = this.getContextType(message);
 
-      const embedding = await this.vectorUtils.generateEmbedding(message.content);
-
       // Get the current message count for index
       const recents = await this.getRecentMessages(contextId, 1000);
       const messageIndex = recents.length;
 
-      Logger.logger.info(`Saving to vector store with id: ${message.id}`);
-      // Upsert (Insert/update) into Pinecone index
-      await this.client.index(this.indexName).upsert([
-        {
-          id: message.id,
-          values: embedding,
-          metadata: {
-            contextId,
-            contextType,
-            userId: message.userId,
-            channelId: message.channelId,
-            threadTs: message.threadTs,
-            content: message.content,
-            messageType: message.messageType,
-            timestamp: message.timestamp,
-            messageIndex,
-            isActive: true,
-            ...message.metadata,
+
+      const chunks = this.vectorUtils.chunkText(message.content);
+      const chunkLength = chunks.length;
+      for(const [index, chunk] of chunks.entries()){
+        const id = message.id+`_${index+1}`;//add the chunk index to the unique id to avoid overwrites.
+        Logger.logger.info(`Saving to vector store with id: ${id}, chunk: ${index+1} of ${chunkLength}`);
+        const embedding = await this.vectorUtils.generateEmbedding(chunk);
+          // Upsert (Insert/update) into Pinecone index
+        await this.client.index(this.indexName).upsert([
+          {
+            id: id,
+            values: embedding,
+            metadata: {
+              contextId,
+              contextType,
+              userId: message.userId,
+              channelId: message.channelId,
+              threadTs: message.threadTs,
+              content: chunk,
+              messageType: message.messageType,
+              timestamp: message.timestamp,
+              messageIndex: messageIndex+index,
+              chunkIndex: index+1,
+              totalChunks: chunkLength,
+              isActive: true,
+              ...message.metadata,
+            }
           }
-        }
-      ]);
+        ]);
+      }
 
       // Prune context to max N active messages
       const maxActiveMessages = contextType === 'channel_thread' ? 100 : 200;
