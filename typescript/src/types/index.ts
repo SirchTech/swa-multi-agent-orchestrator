@@ -49,7 +49,8 @@ export interface ConversationMessage {
 
 export interface ChatHistory {
   messages: ConversationMessage[];
-  summary?: string 
+  summary?: string
+  stats?: any[]
 }
 
 /**

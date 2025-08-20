@@ -11,6 +11,8 @@ export async function saveConversationExchange(
   agentId: string,
   maxHistorySize?: number
 ) {
+  const stats = [];
+
   const userInputObj: ConversationMessage = {
     role: ParticipantRole.USER,
     content: [{ text: userInput }],
@@ -24,6 +26,8 @@ export async function saveConversationExchange(
     maxHistorySize
   );
 
+  stats.push(...(userInputObj.modelStats ?? []));
+
   const agentResponseObj: ConversationMessage = {
     role: ParticipantRole.ASSISTANT,
     content: [{ text: agentResponse }],
@@ -36,4 +40,7 @@ export async function saveConversationExchange(
     agentResponseObj,
     maxHistorySize
   );
+
+  stats.push(...(agentResponseObj.modelStats ?? []));
+  return stats;
 }

@@ -415,8 +415,9 @@ export class MultiAgentOrchestrator {
         };
       }
   
+      let storageStats = [];
       if (classifierResult?.selectedAgent.saveChat) {
-        await saveConversationExchange(
+        storageStats = await saveConversationExchange(
           userInput,
           agentResponse,
           this.storage,
@@ -425,6 +426,10 @@ export class MultiAgentOrchestrator {
           classifierResult?.selectedAgent.id,
           this.config.MAX_MESSAGE_PAIRS_PER_AGENT
         );
+      }
+      
+      if(storageStats && storageStats.length > 0){
+        classifierResult.modelStats.push(...storageStats);
       }
   
       return {
@@ -454,6 +459,7 @@ export class MultiAgentOrchestrator {
       const chatHistory = await this.storage.fetchAllChats(userId, sessionId, additionalParams.query) ||  { messages : []} ;
       this.logger.printChatHistory(chatHistory.messages);
       this.logger.info(`Chat Summary: ${chatHistory.summary}`);
+      this.logger.info(`Chat Retrieval Stats: ${chatHistory.stats}`);
       const classifierResults = await this.classifyRequest(userInput, userId, sessionId, chatHistory);
 
       //iterate over classified results
@@ -470,6 +476,7 @@ export class MultiAgentOrchestrator {
       //modelstats is not needed to be combined as its the same array being set inside classifier.
       agentResponse.info =info;
       agentResponse.metadata = combinedMetadata;
+      agentResponse.modelStats.push(...chatHistory.stats);//add stats from pinecone search and retrieval 
       return agentResponse;
 
     } catch (error) {

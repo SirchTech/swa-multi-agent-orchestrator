@@ -57,7 +57,8 @@ export class PineconeStorage extends ChatStorage {
       isDM: userId === sessionId
     };
 
-    await this.storeMessage(message);
+    const stats = await this.storeMessage(message);
+    newMessage.modelStats = [...stats];
     return [newMessage];
   }
 
@@ -96,7 +97,7 @@ export class PineconeStorage extends ChatStorage {
       metadata: msg.metadata,
     }));
 
-    return { messages, summary: context.summary };
+    return { messages, summary: context.summary, stats: context.stats };
   }
 
   async getRelevantContext(
@@ -105,7 +106,7 @@ export class PineconeStorage extends ChatStorage {
     channelId?: string,
     threadTs?: string,
     maxResults = 10
-  ): Promise<{ messages: any[]; summary?: string }> {
+  ): Promise<{ messages: any[]; summary?: string, stats?: any[] }> {
     try {
       const contextId = this.generateContextId({
         id: '',
@@ -120,11 +121,11 @@ export class PineconeStorage extends ChatStorage {
       Logger.logger.info(`Fetching relevant context: contextId:${contextId}`);
 
       // Generate embedding
-      const queryEmbedding = await this.vectorUtils.generateEmbedding(query);
+      const queryEmbedding = await this.vectorUtils.generateEmbedding(query, "pinecone-relevant-search");
 //filter: { "$and": [{"contextId": contextId}, {"isActive": true}] },
       // Vector similarity search with filter
       const response = await this.client.index(this.indexName).query({
-        vector: queryEmbedding,
+        vector: queryEmbedding.embedding,
         topK: Math.floor(maxResults * 0.7),
         filter: { 
             contextId: {$eq: contextId},
@@ -167,7 +168,8 @@ export class PineconeStorage extends ChatStorage {
       }
       return {
         messages: uniqueMessages.slice(-maxResults),
-        summary
+        summary,
+        stats:queryEmbedding.stats
       };
     } catch (error) {
       console.error('Error getting relevant context:', error);
@@ -193,7 +195,7 @@ export class PineconeStorage extends ChatStorage {
     })) ?? [];
   }
 
-  async storeMessage(message: PineconeChatMessage): Promise<void> {
+  async storeMessage(message: PineconeChatMessage): Promise<any[]> {
     try {
       const contextId = this.generateContextId(message);
       const contextType = this.getContextType(message);
@@ -202,18 +204,18 @@ export class PineconeStorage extends ChatStorage {
       const recents = await this.getRecentMessages(contextId, 1000);
       const messageIndex = recents.length;
 
-
+      const stats = [];
       const chunks = this.vectorUtils.chunkText(message.content);
       const chunkLength = chunks.length;
       for(const [index, chunk] of chunks.entries()){
         const id = message.id+`_${index+1}`;//add the chunk index to the unique id to avoid overwrites.
         Logger.logger.info(`Saving to vector store with id: ${id}, chunk: ${index+1} of ${chunkLength}`);
-        const embedding = await this.vectorUtils.generateEmbedding(chunk);
+        const queryEmbedding = await this.vectorUtils.generateEmbedding(chunk, "pinecone-save-message");
           // Upsert (Insert/update) into Pinecone index
         await this.client.index(this.indexName).upsert([
           {
             id: id,
-            values: embedding,
+            values: queryEmbedding.embedding,
             metadata: {
               contextId,
               contextType,
@@ -231,6 +233,7 @@ export class PineconeStorage extends ChatStorage {
             }
           }
         ]);
+        stats.push(...queryEmbedding.stats);
       }
 
       // Prune context to max N active messages
@@ -239,9 +242,13 @@ export class PineconeStorage extends ChatStorage {
 
       // Trigger summary every 50th message
       if (messageIndex > 0 && messageIndex % 50 === 0) {
-        await this.createContextSummary(contextId);
+        const summaryStats = await this.createContextSummary(contextId);
+        if(summaryStats && summaryStats.length>0){
+          stats.push(...summaryStats);
+        }
       }
       Logger.logger.info('Saved to vectorstore');
+      return stats;
     } catch (error) {
       Logger.logger.error('Error storing message:', error);
       throw error;
@@ -264,11 +271,11 @@ export class PineconeStorage extends ChatStorage {
     }
   }
 
-  private async createContextSummary(contextId: string): Promise<void> {
+  private async createContextSummary(contextId: string): Promise<any[]> {
     // Use getRecentMessages() to collect messages and summarize via LLM
     const messages = await this.getRecentMessages(contextId, 50);
 
-    if (messages.length < 10) return;
+    if (messages.length < 10) return [];
 
     const conversationText = messages
       .sort((a, b) => (a.metadata?.timestamp ?? 0) - (b.metadata?.timestamp ?? 0))
@@ -276,13 +283,13 @@ export class PineconeStorage extends ChatStorage {
       .join('\n');
 
     const summary = await this.llmUtils.generateSummary(conversationText);
-    const summaryEmbedding = await this.vectorUtils.generateEmbedding(summary);
+    const summaryEmbedding = await this.vectorUtils.generateEmbedding(summary, "pinecone-generate-summary");
 
     Logger.logger.info('Saving summary to vector store');
     await this.client.index(this.indexName).upsert([
       {
         id: uuidv4(),
-        values: summaryEmbedding,
+        values: summaryEmbedding.embedding,
         metadata: {
           contextId,
           contextType: contextId.startsWith('channel_') ? 'channel_thread' : 'user_dm',
@@ -296,6 +303,7 @@ export class PineconeStorage extends ChatStorage {
         }
       }
     ]);
+    return summaryEmbedding.stats;
   }
 
   private parseSessionId(

@@ -2,6 +2,7 @@ import {
   BedrockRuntimeClient,
   InvokeModelCommand,
 } from "@aws-sdk/client-bedrock-runtime";
+import { v4 as uuidv4 } from 'uuid';
 
 export class VectorUtils {
   private bedrockClient: BedrockRuntimeClient;
@@ -16,10 +17,11 @@ export class VectorUtils {
     this.overlap = 200;
   }
 
-  async generateEmbedding(text: string): Promise<number[]> {
+  async generateEmbedding(text: string, purpose: string): Promise<{ embedding: number[], stats: any[] }> {
+    const MODEL = "amazon.titan-embed-text-v2:0"
     try {
       const command = new InvokeModelCommand({
-        modelId: "amazon.titan-embed-text-v2:0",
+        modelId: MODEL,
         body: JSON.stringify({
           inputText: text,
         }),
@@ -29,7 +31,16 @@ export class VectorUtils {
       
       const response = await this.bedrockClient.send(command);
       const responseBody = JSON.parse(new TextDecoder().decode(response.body));
-      return responseBody.embedding;
+      const stats = [];
+      const obj = {};
+      obj["id"] = uuidv4();
+      obj["model"] = MODEL;
+      const usage = {};
+      usage["input_tokens"] = responseBody.inputTextTokenCount;
+      obj["usage"] = usage;
+      obj["from"] = purpose;
+      stats.push(obj);
+      return {embedding: responseBody.embedding, stats: stats};
     } catch (error) {
       console.error("Error generating embedding:", error);
       throw error;
