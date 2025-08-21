@@ -459,7 +459,7 @@ export class MultiAgentOrchestrator {
       const chatHistory = await this.storage.fetchAllChats(userId, sessionId, additionalParams.query) ||  { messages : []} ;
       this.logger.printChatHistory(chatHistory.messages);
       this.logger.info(`Chat Summary: ${chatHistory.summary}`);
-      this.logger.info(`Chat Retrieval Stats: ${chatHistory.stats}`);
+      this.logger.info(`Chat Retrieval Stats: `,chatHistory.stats);
       const classifierResults = await this.classifyRequest(userInput, userId, sessionId, chatHistory);
 
       //iterate over classified results

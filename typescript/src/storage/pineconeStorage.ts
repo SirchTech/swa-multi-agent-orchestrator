@@ -25,8 +25,9 @@ export class PineconeStorage extends ChatStorage {
   private llmUtils: LLMUtils;
   private maxCount: number;
   private debugLog: boolean;
+  private namespace: string;
 
-  constructor(indexName: string, llmUtils: LLMUtils, maxCount: number, debugLog: boolean) {
+  constructor(indexName: string, namespace: string, llmUtils: LLMUtils, maxCount: number, debugLog: boolean) {
     super();
     this.client = new Pinecone({
       apiKey: process.env['PINECONE_KEY'],
@@ -36,6 +37,7 @@ export class PineconeStorage extends ChatStorage {
     this.llmUtils = llmUtils;
     this.maxCount = maxCount || 20;
     this.debugLog = debugLog || false;
+    this.namespace = namespace ?? "__default__";
   }
 
   async saveChatMessage(
@@ -67,7 +69,7 @@ export class PineconeStorage extends ChatStorage {
     const id = this.generatePineconeId(channelId, threadTs, userId);
 
     // Fetch vector (by id) from Pinecone
-    const result = await this.client.index(this.indexName).fetch([id]);
+    const result = await this.client.index(this.indexName).namespace(this.namespace).fetch([id]);
     // const vector = result.vectors?.[id];
     const record = result.records?.[id]
     if (!record) return [];
@@ -124,7 +126,7 @@ export class PineconeStorage extends ChatStorage {
       const queryEmbedding = await this.vectorUtils.generateEmbedding(query, "pinecone-relevant-search");
 //filter: { "$and": [{"contextId": contextId}, {"isActive": true}] },
       // Vector similarity search with filter
-      const response = await this.client.index(this.indexName).query({
+      const response = await this.client.index(this.indexName).namespace(this.namespace).query({
         vector: queryEmbedding.embedding,
         topK: Math.floor(maxResults * 0.7),
         filter: { 
@@ -180,7 +182,7 @@ export class PineconeStorage extends ChatStorage {
   async getRecentMessages(contextId: string, limit = 20): Promise<any[]> {
     // Pinecone doesn't have a scroll; instead use filtered query for recent active messages.
     Logger.logger.info('getting recent messages');
-    const response = await this.client.index(this.indexName).query({
+    const response = await this.client.index(this.indexName).namespace(this.namespace).query({
       vector: Array(VECTOR_DIMENSION).fill(0), // "Zero" vector to get recent; you might use a random probe or track recency in metadata.
       topK: limit,
       filter: { 
@@ -212,7 +214,7 @@ export class PineconeStorage extends ChatStorage {
         Logger.logger.info(`Saving to vector store with id: ${id}, chunk: ${index+1} of ${chunkLength}`);
         const queryEmbedding = await this.vectorUtils.generateEmbedding(chunk, "pinecone-save-message");
           // Upsert (Insert/update) into Pinecone index
-        await this.client.index(this.indexName).upsert([
+        await this.client.index(this.indexName).namespace(this.namespace).upsert([
           {
             id: id,
             values: queryEmbedding.embedding,
@@ -261,7 +263,7 @@ export class PineconeStorage extends ChatStorage {
     const toDeactivate = messages.slice(keepRecent);
     Logger.logger.info('Deactivating old messages');
     for (const record of toDeactivate) {
-      await this.client.index(this.indexName).upsert([
+      await this.client.index(this.indexName).namespace(this.namespace).upsert([
         {
           id: record.id,
           values: record.values ?? Array(VECTOR_DIMENSION).fill(0),  // Pinecone requires values -- you may need to cache/fetch these!
@@ -286,7 +288,7 @@ export class PineconeStorage extends ChatStorage {
     const summaryEmbedding = await this.vectorUtils.generateEmbedding(summary, "pinecone-generate-summary");
 
     Logger.logger.info('Saving summary to vector store');
-    await this.client.index(this.indexName).upsert([
+    await this.client.index(this.indexName).namespace(this.namespace).upsert([
       {
         id: uuidv4(),
         values: summaryEmbedding.embedding,
@@ -343,7 +345,7 @@ export class PineconeStorage extends ChatStorage {
 
   private async getContextSummary(contextId: string): Promise<string | undefined> {
     // Pinecone does not support attribute ordering. Instead, perform filtered query for summaries.
-    const response = await this.client.index(this.indexName).query({
+    const response = await this.client.index(this.indexName).namespace(this.namespace).query({
       vector: Array(VECTOR_DIMENSION).fill(0),
       topK: 1,
       filter: { 
